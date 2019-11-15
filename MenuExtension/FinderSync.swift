@@ -10,14 +10,16 @@ import Cocoa
 import FinderSync
 
 class FinderSync: FIFinderSync {
-	var menuCommands = [String: String]()
+	var menuItems = [[String]]()
+	var completePath = ""
 
-	func loadMenuItems() -> [[String]] {
+	func loadMenuItems() {
 		let defaults = UserDefaults.standard.object(forKey: "MenuItems")
 		if defaults == nil {
-			return [[String]]()
+			menuItems = [[String]]()
+			return
 		}
-		return defaults as! [[String]]
+		menuItems = defaults as! [[String]]
 	}
 
 	func loadMountPoints() {
@@ -33,6 +35,22 @@ class FinderSync: FIFinderSync {
 
 	// MARK: - Menu and toolbar item support
 
+	func newMenuItem(title: String, action: Selector?, isEnabled: Bool? = true, tag: NSInteger? = -1) -> NSMenuItem {
+		let menuItem = NSMenuItem(title: title, action: action, keyEquivalent: "")
+		menuItem.isEnabled = isEnabled!
+		menuItem.tag = tag!
+		return menuItem
+	}
+
+	func getPath() -> [String]? {
+		var path = FIFinderSyncController.default().targetedURL()!
+		let selectedItems = FIFinderSyncController.default().selectedItemURLs()
+		if selectedItems != nil, selectedItems!.count == 1, selectedItems?.first?.hasDirectoryPath == true {
+			path = (selectedItems?.first!)!
+		}
+		return [path.path, path.lastPathComponent]
+	}
+
 	override var toolbarItemName: String {
 		return "Menu"
 	}
@@ -46,30 +64,39 @@ class FinderSync: FIFinderSync {
 	}
 
 	override func menu(for menuKind: FIMenuKind) -> NSMenu {
-		loadMountPoints()
 		let menu = NSMenu(title: "")
-		if menuKind == .contextualMenuForContainer || menuKind == .toolbarItemMenu {
-			let menuItems = loadMenuItems()
-			if menuItems.count == 0 {
-				let noMenuItem = NSMenuItem(title: "No Menu", action: nil, keyEquivalent: "")
-				noMenuItem.isEnabled = false
-				menu.addItem(noMenuItem)
-			} else {
-				for menuItem in menuItems {
-					menu.addItem(withTitle: menuItem[0], action: #selector(menuAction), keyEquivalent: "")
-					menuCommands[menuItem[0]] = menuItem[1]
-				}
-			}
+		if menuKind != .contextualMenuForContainer, menuKind != .toolbarItemMenu, menuKind != .contextualMenuForItems {
+			return menu
+		}
+		let path = getPath()
+		if path == nil {
+			return menu
+		}
+		loadMenuItems()
+		loadMountPoints()
+		completePath = path![0]
+		menu.addItem(newMenuItem(title: path![1], action: #selector(menuAction), isEnabled: false))
+		var itemsIndex = 0
+		for menuItem in menuItems {
+			menu.addItem(newMenuItem(
+				title: menuItem[0],
+				action: #selector(menuAction),
+				tag: itemsIndex
+			))
+			itemsIndex += 1
 		}
 		return menu
 	}
 
-	@IBAction func menuAction(_ sender: NSMenuItem) {
+	@IBAction func menuAction(_ menuItem: NSMenuItem) {
+		if menuItem.tag < 0 {
+			return
+		}
 		let proc = Process()
 		proc.environment = ProcessInfo.processInfo.environment
-		proc.currentDirectoryPath = FIFinderSyncController.default().targetedURL()?.path ?? "~/"
-		proc.launchPath = "/bin/sh"
-		proc.arguments = ["-c", menuCommands[sender.title]!]
+		proc.currentDirectoryPath = completePath
+		proc.launchPath = "/bin/bash"
+		proc.arguments = ["-c", menuItems[menuItem.tag][1]]
 		proc.launch()
 	}
 }
