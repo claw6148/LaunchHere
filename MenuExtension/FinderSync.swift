@@ -10,27 +10,44 @@ import Cocoa
 import FinderSync
 
 class FinderSync: FIFinderSync {
+	let keyName = "MenuItems"
 	var menuItems = [[String]]()
-	var completePath = ""
+	var completePath = String()
 
-	func loadMenuItems() {
-		let defaults = UserDefaults.standard.object(forKey: "MenuItems")
-		if defaults == nil {
-			menuItems = [[String]]()
-			return
+	func loadMenuItems() -> [[String]] {
+		if let defaults = UserDefaults.standard.object(forKey: keyName) {
+			return defaults as! [[String]]
+		} else {
+			return [[String]]()
 		}
-		menuItems = defaults as! [[String]]
 	}
 
-	func loadMountPoints() {
-		let keys: [URLResourceKey] = [.volumeNameKey, .volumeIsRemovableKey, .volumeIsEjectableKey]
-		let paths = FileManager().mountedVolumeURLs(includingResourceValuesForKeys: keys, options: [])
-		FIFinderSyncController.default().directoryURLs = Set(paths!)
+	func loadMountPoints() -> [URL] {
+		let paths = FileManager().mountedVolumeURLs(includingResourceValuesForKeys: nil, options: [])
+		return paths ?? [URL(fileURLWithPath: "/")]
+	}
+
+	override func observeValue(forKeyPath keyPath: String?, of _: Any?, change _: [NSKeyValueChangeKey: Any]?, context _: UnsafeMutableRawPointer?) {
+		if keyPath != keyName {
+			return
+		}
+		menuItems = loadMenuItems()
+	}
+
+	@objc func volNotifyHandler(notification _: NSNotification) {
+		FIFinderSyncController.default().directoryURLs = Set(loadMountPoints())
 	}
 
 	override init() {
 		super.init()
-		loadMountPoints()
+		menuItems = loadMenuItems()
+		FIFinderSyncController.default().directoryURLs = Set(loadMountPoints())
+		let ud = UserDefaults.standard
+		ud.addObserver(self, forKeyPath: keyName, options: .new, context: nil)
+		let nc = NSWorkspace.shared.notificationCenter
+		nc.addObserver(self, selector: #selector(volNotifyHandler), name: NSWorkspace.didMountNotification, object: nil)
+		nc.addObserver(self, selector: #selector(volNotifyHandler), name: NSWorkspace.didUnmountNotification, object: nil)
+		nc.addObserver(self, selector: #selector(volNotifyHandler), name: NSWorkspace.didRenameVolumeNotification, object: nil)
 	}
 
 	// MARK: - Menu and toolbar item support
@@ -43,10 +60,20 @@ class FinderSync: FIFinderSync {
 	}
 
 	func getPath() -> [String]? {
-		var path = FIFinderSyncController.default().targetedURL()!
-		let selectedItems = FIFinderSyncController.default().selectedItemURLs()
-		if selectedItems != nil, selectedItems!.count == 1, selectedItems?.first?.hasDirectoryPath == true {
-			path = (selectedItems?.first!)!
+		guard var path = FIFinderSyncController.default().targetedURL() else {
+			return nil
+		}
+		if let selectedItems = FIFinderSyncController.default().selectedItemURLs() {
+			if selectedItems.count == 1,
+				let first = selectedItems.first {
+				if first.hasDirectoryPath {
+					path = first
+				} else {
+					path = first.deletingLastPathComponent()
+				}
+			} else if selectedItems.count > 1 {
+				return nil
+			}
 		}
 		return [path.path, path.lastPathComponent]
 	}
@@ -68,14 +95,11 @@ class FinderSync: FIFinderSync {
 		if menuKind != .contextualMenuForContainer, menuKind != .toolbarItemMenu, menuKind != .contextualMenuForItems {
 			return menu
 		}
-		let path = getPath()
-		if path == nil {
+		guard let path = getPath() else {
 			return menu
 		}
-		loadMenuItems()
-		loadMountPoints()
-		completePath = path![0]
-		menu.addItem(newMenuItem(title: path![1], action: #selector(menuAction), isEnabled: false))
+		completePath = path[0]
+		menu.addItem(newMenuItem(title: path[1], action: #selector(menuAction), isEnabled: false))
 		var itemsIndex = 0
 		for menuItem in menuItems {
 			menu.addItem(newMenuItem(
